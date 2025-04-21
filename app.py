@@ -2,6 +2,8 @@ import logging
 import threading
 import queue
 import json
+import os
+import urllib.request
 import cv2
 import numpy as np
 from flask import Flask, request, jsonify
@@ -9,25 +11,38 @@ from ultralytics import YOLO
 from flask_cors import CORS
 from flask_socketio import SocketIO, emit
 
+# === Logging setup ===
 logging.basicConfig(filename='web.log', level=logging.INFO, 
                     format='%(asctime)s - %(levelname)s - %(message)s')
 
+# === Flask app and SocketIO setup ===
 app = Flask(__name__)
 CORS(app)
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
 
-frame_queue = queue.Queue(maxsize=10)
-latest_detections = []
-detection_event = threading.Event()
+# === Constants ===
+MODEL_PATH = 'best.onnx'
+GDRIVE_URL = 'https://drive.google.com/uc?export=download&id=1JWVH0gQ4e6KVJERCNyQRgnD8FNP3pOZc'
 
+# === Download model from Google Drive if not present ===
+def download_model():
+    if not os.path.exists(MODEL_PATH):
+        logging.info("Downloading model from Google Drive...")
+        urllib.request.urlretrieve(GDRIVE_URL, MODEL_PATH)
+        logging.info("Model downloaded successfully.")
+
+# === Load the YOLO model ===
 def load_model():
     global model
-    model = YOLO('https://drive.google.com/file/d/1JWVH0gQ4e6KVJERCNyQRgnD8FNP3pOZc/view?usp=drive_link', task='detect')
+    download_model()
+    model = YOLO(MODEL_PATH, task='detect')
     _ = model(np.zeros((640, 480, 3), dtype=np.uint8))
-    logging.info("Model loaded and warmed up")
+    logging.info("Model loaded and warmed up.")
 
+# Start model loading in a separate thread
 threading.Thread(target=load_model, daemon=True).start()
 
+# === Routes ===
 @app.route('/status')
 def status():
     return jsonify({"ready": "model" in globals()})
@@ -50,6 +65,7 @@ def detect():
         logging.error(f"Error during object detection: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
+# === Frame Processing ===
 def process_frame(frame, roi_info=None):
     if 'model' not in globals():
         return []
@@ -60,15 +76,15 @@ def process_frame(frame, roi_info=None):
             width = int(roi_info['width'])
             height = int(roi_info['height'])
             h, w = frame.shape[:2]
-            # Ensure cropping is within bounds
-            x = max(0, min(x, w-1))
-            y = max(0, min(y, h-1))
-            width = max(1, min(width, w-x))
-            height = max(1, min(height, h-y))
-            frame = frame[y:y+height, x:x+width]
+            x = max(0, min(x, w - 1))
+            y = max(0, min(y, h - 1))
+            width = max(1, min(width, w - x))
+            height = max(1, min(height, h - y))
+            frame = frame[y:y + height, x:x + width]
             logging.info(f"Processing cropped frame at offset ({x},{y}) size ({width}x{height})")
         else:
             logging.info("Processing full frame")
+        
         results = model(frame)
         detections = []
         for r in results:
@@ -89,5 +105,6 @@ def process_frame(frame, roi_info=None):
         logging.error(f"Cropping or detection error: {str(e)}")
         return []
 
+# === Start the server ===
 if __name__ == '__main__':
     socketio.run(app, host='0.0.0.0', port=5000)
