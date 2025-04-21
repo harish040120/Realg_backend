@@ -22,7 +22,7 @@ detection_event = threading.Event()
 
 def load_model():
     global model
-    model = YOLO('H:/Construction_Safety/project/backend/best.onnx', task='detect')
+    model = YOLO('https://drive.google.com/file/d/1JWVH0gQ4e6KVJERCNyQRgnD8FNP3pOZc/view?usp=drive_link', task='detect')
     _ = model(np.zeros((640, 480, 3), dtype=np.uint8))
     logging.info("Model loaded and warmed up")
 
