@@ -1,110 +1,63 @@
-import logging
-import threading
-import queue
-import json
-import os
-import urllib.request
+from flask import Flask, request, jsonify
+from flask_cors import CORS
+from ultralytics import YOLO
 import cv2
 import numpy as np
-from flask import Flask, request, jsonify
-from ultralytics import YOLO
-from flask_cors import CORS
-from flask_socketio import SocketIO, emit
+import os
+import requests
 
-# === Logging setup ===
-logging.basicConfig(filename='web.log', level=logging.INFO, 
-                    format='%(asctime)s - %(levelname)s - %(message)s')
-
-# === Flask app and SocketIO setup ===
 app = Flask(__name__)
 CORS(app)
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
 
-# === Constants ===
-MODEL_PATH = 'best.onnx'
-GDRIVE_URL = 'https://drive.google.com/uc?export=download&id=1JWVH0gQ4e6KVJERCNyQRgnD8FNP3pOZc'
+# Load YOLO model from Google Drive (if not already present)
+model_path = "best.onnx"
+model_url = "https://drive.google.com/uc?id=1mYZvpVaJWQl2PFCrjRWTPm3zRikmXgZiu&export=download"
 
-# === Download model from Google Drive if not present ===
-def download_model():
-    if not os.path.exists(MODEL_PATH):
-        logging.info("Downloading model from Google Drive...")
-        urllib.request.urlretrieve(GDRIVE_URL, MODEL_PATH)
-        logging.info("Model downloaded successfully.")
+if not os.path.exists(model_path):
+    print("Downloading model...")
+    response = requests.get(model_url)
+    with open(model_path, "wb") as f:
+        f.write(response.content)
+    print("Model downloaded.")
 
-# === Load the YOLO model ===
-def load_model():
-    global model
-    download_model()
-    model = YOLO(MODEL_PATH, task='detect')
-    _ = model(np.zeros((640, 480, 3), dtype=np.uint8))
-    logging.info("Model loaded and warmed up.")
+# Load YOLO model
+model = YOLO(model_path)
+model_loaded = True  # Signal that the model is ready
 
-# Start model loading in a separate thread
-threading.Thread(target=load_model, daemon=True).start()
+@app.route('/')
+def home():
+    return "🚀 YOLO ONNX Flask App is running!"
 
-# === Routes ===
 @app.route('/status')
 def status():
-    return jsonify({"ready": "model" in globals()})
+    return jsonify({"ready": model_loaded})
 
 @app.route('/detect', methods=['POST'])
 def detect():
-    try:
-        if 'image' not in request.files:
-            return jsonify({'error': 'No image provided'}), 400
-        file = request.files['image']
-        img_bytes = file.read()
-        nparr = np.frombuffer(img_bytes, np.uint8)
-        frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-        roi_info = None
-        if 'roi' in request.form:
-            roi_info = json.loads(request.form['roi'])
-        detections = process_frame(frame, roi_info)
-        return jsonify({'detections': detections})
-    except Exception as e:
-        logging.error(f"Error during object detection: {str(e)}")
-        return jsonify({'error': str(e)}), 500
+    if not model_loaded:
+        return jsonify({'error': 'Model not yet loaded'}), 503
 
-# === Frame Processing ===
-def process_frame(frame, roi_info=None):
-    if 'model' not in globals():
-        return []
-    try:
-        if roi_info and 'offset' in roi_info:
-            x = int(roi_info['offset']['x'])
-            y = int(roi_info['offset']['y'])
-            width = int(roi_info['width'])
-            height = int(roi_info['height'])
-            h, w = frame.shape[:2]
-            x = max(0, min(x, w - 1))
-            y = max(0, min(y, h - 1))
-            width = max(1, min(width, w - x))
-            height = max(1, min(height, h - y))
-            frame = frame[y:y + height, x:x + width]
-            logging.info(f"Processing cropped frame at offset ({x},{y}) size ({width}x{height})")
-        else:
-            logging.info("Processing full frame")
-        
-        results = model(frame)
-        detections = []
-        for r in results:
-            for box in r.boxes:
-                x1, y1, x2, y2 = map(int, box.xyxy[0])
-                conf = box.conf[0].item()
-                class_id = int(box.cls[0])
-                class_name = model.names[class_id]
-                if conf > 0.5:
-                    detections.append({
-                        'class': class_name,
-                        'confidence': round(conf, 2),
-                        'bbox': [x1, y1, x2, y2]
-                    })
-        person_detections = [d for d in detections if d['class'] == 'Person']
-        return person_detections
-    except Exception as e:
-        logging.error(f"Cropping or detection error: {str(e)}")
-        return []
+    if 'image' not in request.files:
+        return jsonify({'error': 'No image uploaded'}), 400
 
-# === Start the server ===
+    image_file = request.files['image']
+    img_np = np.frombuffer(image_file.read(), np.uint8)
+    img = cv2.imdecode(img_np, cv2.IMREAD_COLOR)
+
+    results = model(img)[0]
+
+    detections = []
+    for box in results.boxes:
+        x1, y1, x2, y2 = map(int, box.xyxy[0])
+        conf = float(box.conf[0])
+        cls = int(box.cls[0])
+        detections.append({
+            'bbox': [x1, y1, x2, y2],
+            'confidence': round(conf, 2),
+            'class': cls
+        })
+
+    return jsonify({'detections': detections})
+
 if __name__ == '__main__':
-    socketio.run(app, host='0.0.0.0', port=5000)
+    app.run(host='0.0.0.0', port=5000)
