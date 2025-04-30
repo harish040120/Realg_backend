@@ -6,8 +6,15 @@ import numpy as np
 import os
 import gdown
 
+
 app = Flask(__name__)
 CORS(app)
+
+frame_queue = queue.Queue(maxsize=10)
+latest_detections = []
+detection_event = threading.Event()
+violation_history = []
+SAFETY_THRESHOLD = 0.65 
 
 # ✅ Correct Google Drive file ID-based download URL
 model_path = "best.onnx"
