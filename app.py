@@ -9,21 +9,24 @@ import gdown
 app = Flask(__name__)
 CORS(app)
 
-# Google Drive model download
+# ✅ Correct Google Drive file ID-based download URL
 model_path = "best.onnx"
-model_url = "https://drive.google.com/file/d/1JWVH0gQ4e6KVJERCNyQRgnD8FNP3pOZc/view?usp=drive_link"  # Replace with your actual model ID if different
+drive_file_id = "1JWVH0gQ4e6KVJERCNyQRgnD8FNP3pOZc"
+gdown_url = f"https://drive.google.com/uc?id={drive_file_id}"
 
+# 🔄 Download ONNX model if not present
 if not os.path.exists(model_path):
-    print("🔄 Downloading model from Google Drive...")
-    gdown.download(model_url, model_path, quiet=False)
-    print("✅ Model downloaded.")
+    print("🔄 Downloading ONNX model from Google Drive...")
+    gdown.download(gdown_url, model_path, quiet=False)
+    print("✅ Model downloaded successfully.")
 
-# Load YOLO model
+# ✅ Load YOLO ONNX model
 try:
     model = YOLO(model_path)
     model_loaded = True
+    print("✅ Model loaded and ready.")
 except Exception as e:
-    print(f"❌ Failed to load model: {e}")
+    print(f"❌ Model loading failed: {e}")
     model_loaded = False
 
 @app.route('/')
@@ -48,21 +51,22 @@ def detect():
 
     try:
         results = model(img)[0]
+        detections = []
+        for box in results.boxes:
+            x1, y1, x2, y2 = map(int, box.xyxy[0])
+            conf = float(box.conf[0])
+            cls = int(box.cls[0])
+            detections.append({
+                'bbox': [x1, y1, x2, y2],
+                'confidence': round(conf, 2),
+                'class': cls
+            })
+
+        return jsonify({'detections': detections})
+
     except Exception as e:
+        print(f"❌ Inference error: {e}")
         return jsonify({'error': f'Model prediction failed: {str(e)}'}), 500
-
-    detections = []
-    for box in results.boxes:
-        x1, y1, x2, y2 = map(int, box.xyxy[0])
-        conf = float(box.conf[0])
-        cls = int(box.cls[0])
-        detections.append({
-            'bbox': [x1, y1, x2, y2],
-            'confidence': round(conf, 2),
-            'class': cls
-        })
-
-    return jsonify({'detections': detections})
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
