@@ -1,60 +1,64 @@
+import os
 import logging
+import json
 import threading
 import queue
-import json
 import cv2
 import numpy as np
-import os
+import onnxruntime as ort
 import requests
-from datetime import datetime
 from flask import Flask, request, jsonify
-from ultralytics import YOLO
+from flask_socketio import SocketIO
 from flask_cors import CORS
-from flask_socketio import SocketIO, emit
+from datetime import datetime
 
-logging.basicConfig(filename='web.log', level=logging.INFO, 
-                    format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=logging.INFO)
 
 app = Flask(__name__)
 CORS(app)
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet')
 
-frame_queue = queue.Queue(maxsize=10)
-latest_detections = []
-detection_event = threading.Event()
-violation_history = []
-SAFETY_THRESHOLD = 0.65  # Higher confidence threshold for safety equipment
-
-# ✅ Replace this with your direct model download link (GitHub Release / HuggingFace)
 MODEL_URL = "https://github.com/Deepakchandrasekar05/cctv_realg_backend/releases/download/Model/best.onnx"
 MODEL_PATH = "/tmp/model.onnx"
 
+SAFETY_THRESHOLD = 0.65
+violation_history = []
+
+model_session = None
+model_input_shape = (640, 640)
+
 def download_model():
     if not os.path.exists(MODEL_PATH):
-        logging.info("Downloading model...")
-        response = requests.get(MODEL_URL, stream=True)
-        if response.status_code == 200:
-            with open(MODEL_PATH, 'wb') as f:
-                for chunk in response.iter_content(chunk_size=8192):
-                    f.write(chunk)
-            logging.info("Download complete.")
-        else:
-            logging.error(f"Failed to download model: {response.status_code}")
-            raise RuntimeError("Model download failed")
+        logging.info("Downloading ONNX model from GitHub Releases...")
+        response = requests.get(MODEL_URL)
+        with open(MODEL_PATH, 'wb') as f:
+            f.write(response.content)
+        logging.info("Model downloaded successfully.")
+
+def letterbox(img, new_shape=(640, 640), color=(114, 114, 114)):
+    shape = img.shape[:2]  # current shape [height, width]
+    r = min(new_shape[0] / shape[0], new_shape[1] / shape[1])
+    new_unpad = (int(round(shape[1] * r)), int(round(shape[0] * r)))
+    dw, dh = new_shape[1] - new_unpad[0], new_shape[0] - new_unpad[1]
+    dw /= 2
+    dh /= 2
+    img = cv2.resize(img, new_unpad, interpolation=cv2.INTER_LINEAR)
+    top, bottom = int(round(dh - 0.1)), int(round(dh + 0.1))
+    left, right = int(round(dw - 0.1)), int(round(dw + 0.1))
+    img = cv2.copyMakeBorder(img, top, bottom, left, right, cv2.BORDER_CONSTANT, value=color)
+    return img, r, (dw, dh)
 
 def load_model():
-    global model
+    global model_session
     download_model()
-    model = YOLO(MODEL_PATH, task='detect')
-    #_ = model(np.zeros((640, 480, 3), dtype=np.uint8))  # Warm up
-    logging.info("Model loaded and warmed up.")
-
-# Run model loading in background thread
-threading.Thread(target=load_model, daemon=True).start()
+    providers = ['CPUExecutionProvider']
+    logging.info(f"Loading {MODEL_PATH} for ONNX Runtime inference...")
+    model_session = ort.InferenceSession(MODEL_PATH, providers=providers)
+    logging.info("Model loaded successfully.")
 
 @app.route('/status')
 def status():
-    return jsonify({"ready": "model" in globals()})
+    return jsonify({"ready": model_session is not None})
 
 @app.route('/violations')
 def get_violations():
@@ -65,83 +69,66 @@ def get_violations():
 
 @app.route('/detect', methods=['POST'])
 def detect():
-    try:
-        if 'image' not in request.files:
-            return jsonify({'error': 'No image provided'}), 400
-        
-        file = request.files['image']
-        img_bytes = file.read()
-        nparr = np.frombuffer(img_bytes, np.uint8)
-        frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-        
-        roi_info = None
-        if 'roi' in request.form:
-            roi_info = json.loads(request.form['roi'])
-        
-        detections = process_frame(frame, roi_info)
-        
-        current_violations = [
-            d for d in detections 
-            if d['class'] in ['NO-Hardhat', 'NO-Mask', 'NO-Safety Vest'] and d['confidence'] > SAFETY_THRESHOLD
-        ]
+    if model_session is None:
+        return jsonify({"error": "Model not loaded"}), 500
 
-        if current_violations:
-            timestamp = datetime.now().isoformat()
-            violation_data = {
-                "timestamp": timestamp,
-                "violations": current_violations,
-                "image": cv2.imencode('.jpg', frame)[1].tobytes().hex()
-            }
-            violation_history.append(violation_data)
-            socketio.emit('new_violation', violation_data)
-        
-        return jsonify({
-            'detections': detections,
-            'violation_count': len(current_violations)
-        })
-        
-    except Exception as e:
-        logging.error(f"Error during object detection: {str(e)}")
-        return jsonify({'error': str(e)}), 500
+    if 'image' not in request.files:
+        return jsonify({'error': 'No image provided'}), 400
 
-def process_frame(frame, roi_info=None):
-    if 'model' not in globals():
-        return []
-    
-    try:
-        if roi_info and 'offset' in roi_info:
-            x = int(roi_info['offset']['x'])
-            y = int(roi_info['offset']['y'])
-            width = int(roi_info['width'])
-            height = int(roi_info['height'])
-            h, w = frame.shape[:2]
-            x = max(0, min(x, w-1))
-            y = max(0, min(y, h-1))
-            width = max(1, min(width, w-x))
-            height = max(1, min(height, h-y))
-            frame = frame[y:y+height, x:x+width]
-        
-        results = model(frame)
-        detections = []
-        
-        for r in results:
-            for box in r.boxes:
-                x1, y1, x2, y2 = map(int, box.xyxy[0])
-                conf = box.conf[0].item()
-                class_id = int(box.cls[0])
-                class_name = model.names[class_id]
-                min_conf = SAFETY_THRESHOLD if class_name == 'Person' else 0.5
-                if conf > min_conf:
-                    detections.append({
-                        'class': class_name,
-                        'confidence': round(conf, 2),
-                        'bbox': [x1, y1, x2, y2]
-                    })
-        return detections
-        
-    except Exception as e:
-        logging.error(f"Cropping or detection error: {str(e)}")
-        return []
+    file = request.files['image']
+    img_bytes = file.read()
+    npimg = np.frombuffer(img_bytes, np.uint8)
+    frame = cv2.imdecode(npimg, cv2.IMREAD_COLOR)
+
+    results = run_inference(frame)
+    current_violations = [det for det in results if det['class'].startswith('NO-') and det['confidence'] > SAFETY_THRESHOLD]
+
+    if current_violations:
+        timestamp = datetime.now().isoformat()
+        violation_data = {
+            "timestamp": timestamp,
+            "violations": current_violations,
+            "image": cv2.imencode('.jpg', frame)[1].tobytes().hex()
+        }
+        violation_history.append(violation_data)
+        socketio.emit('new_violation', violation_data)
+
+    return jsonify({
+        'detections': results,
+        'violation_count': len(current_violations)
+    })
+
+def run_inference(img):
+    img_resized, _, _ = letterbox(img, new_shape=model_input_shape)
+    img_input = cv2.cvtColor(img_resized, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
+    img_input = np.transpose(img_input, (2, 0, 1))[np.newaxis, ...]
+
+    inputs = {model_session.get_inputs()[0].name: img_input}
+    outputs = model_session.run(None, inputs)[0]
+
+    detections = []
+    for det in outputs[0]:
+        x1, y1, x2, y2, conf, cls_id = det[:6]
+        if conf > 0.4:
+            detections.append({
+                "class": get_class_name(cls_id),
+                "confidence": float(conf),
+                "bbox": [int(x1), int(y1), int(x2), int(y2)]
+            })
+    return detections
+
+# Map class IDs to names – update based on your training
+def get_class_name(cls_id):
+    class_names = {
+        0: "Hardhat",
+        1: "NO-Hardhat",
+        2: "Mask",
+        3: "NO-Mask",
+        4: "Safety Vest",
+        5: "NO-Safety Vest"
+    }
+    return class_names.get(int(cls_id), f"Class-{int(cls_id)}")
 
 if __name__ == '__main__':
+    threading.Thread(target=load_model, daemon=True).start()
     socketio.run(app, host='0.0.0.0', port=5000)
