@@ -16,7 +16,7 @@ logging.basicConfig(level=logging.INFO)
 
 app = Flask(__name__)
 CORS(app)
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet')
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
 
 MODEL_URL = "https://github.com/Deepakchandrasekar05/cctv_realg_backend/releases/download/Model/best.onnx"
 MODEL_PATH = "/tmp/model.onnx"
