@@ -46,7 +46,7 @@ def load_model():
     global model
     download_model()
     model = YOLO(MODEL_PATH, task='detect')
-    _ = model(np.zeros((640, 480, 3), dtype=np.uint8))  # Warm up
+    #_ = model(np.zeros((640, 480, 3), dtype=np.uint8))  # Warm up
     logging.info("Model loaded and warmed up.")
 
 # Run model loading in background thread
