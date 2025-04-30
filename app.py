@@ -1,44 +1,47 @@
-from flask import Flask, request, jsonify
-from flask_cors import CORS
-from ultralytics import YOLO
+import logging
+import threading
+import queue
+import json
 import cv2
 import numpy as np
 import os
 import gdown
+from datetime import datetime
+from flask import Flask, request, jsonify
+from ultralytics import YOLO
+from flask_cors import CORS
+from flask_socketio import SocketIO, emit
 
+logging.basicConfig(filename='web.log', level=logging.INFO, 
+                    format='%(asctime)s - %(levelname)s - %(message)s')
 
 app = Flask(__name__)
 CORS(app)
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
 
 frame_queue = queue.Queue(maxsize=10)
 latest_detections = []
 detection_event = threading.Event()
 violation_history = []
-SAFETY_THRESHOLD = 0.65 
+SAFETY_THRESHOLD = 0.65  # Higher confidence threshold for safety equipment
 
-# ✅ Correct Google Drive file ID-based download URL
-model_path = "best.onnx"
-drive_file_id = "1JWVH0gQ4e6KVJERCNyQRgnD8FNP3pOZc"
-gdown_url = f"https://drive.google.com/uc?id={drive_file_id}"
+MODEL_URL = "https://drive.google.com/uc?id=1JWVH0gQ4e6KVJERCNyQRgnD8FNP3pOZc"
+MODEL_PATH = "best.onnx"
 
-# 🔄 Download ONNX model if not present
-if not os.path.exists(model_path):
-    print("🔄 Downloading ONNX model from Google Drive...")
-    gdown.download(gdown_url, model_path, quiet=False)
-    print("✅ Model downloaded successfully.")
+def download_model():
+    if not os.path.exists(MODEL_PATH):
+        logging.info("Downloading model from Google Drive...")
+        gdown.download(MODEL_URL, MODEL_PATH, quiet=False)
+        logging.info("Download complete.")
 
-# ✅ Load YOLO ONNX model
-try:
-    model = YOLO(model_path)
-    model_loaded = True
-    print("✅ Model loaded and ready.")
-except Exception as e:
-    print(f"❌ Model loading failed: {e}")
-    model_loaded = False
+def load_model():
+    global model
+    download_model()
+    model = YOLO(MODEL_PATH, task='detect')
+    _ = model(np.zeros((640, 480, 3), dtype=np.uint8))
+    logging.info("Model loaded and warmed up.")
 
-@app.route('/')
-def home():
-    return "🚀 YOLO ONNX Flask App is running!"
+threading.Thread(target=load_model, daemon=True).start()
 
 @app.route('/status')
 def status():
@@ -48,7 +51,7 @@ def status():
 def get_violations():
     return jsonify({
         "total_violations": len(violation_history),
-        "violations": violation_history[-50:]  # Return last 50 violations
+        "violations": violation_history[-50:]
     })
 
 @app.route('/detect', methods=['POST'])
@@ -68,18 +71,17 @@ def detect():
         
         detections = process_frame(frame, roi_info)
         
-        # Track violations
-        current_violations = []
-        for d in detections:
-            if d['class'] in ['NO-Hardhat', 'NO-Mask', 'NO-Safety Vest'] and d['confidence'] > SAFETY_THRESHOLD:
-                current_violations.append(d)
-        
+        current_violations = [
+            d for d in detections 
+            if d['class'] in ['NO-Hardhat', 'NO-Mask', 'NO-Safety Vest'] and d['confidence'] > SAFETY_THRESHOLD
+        ]
+
         if current_violations:
             timestamp = datetime.now().isoformat()
             violation_data = {
                 "timestamp": timestamp,
                 "violations": current_violations,
-                "image": cv2.imencode('.jpg', frame)[1].tobytes().hex()  # Store frame hex
+                "image": cv2.imencode('.jpg', frame)[1].tobytes().hex()
             }
             violation_history.append(violation_data)
             socketio.emit('new_violation', violation_data)
@@ -104,13 +106,12 @@ def process_frame(frame, roi_info=None):
             width = int(roi_info['width'])
             height = int(roi_info['height'])
             h, w = frame.shape[:2]
-            
             x = max(0, min(x, w-1))
             y = max(0, min(y, h-1))
             width = max(1, min(width, w-x))
             height = max(1, min(height, h-y))
             frame = frame[y:y+height, x:x+width]
-            
+        
         results = model(frame)
         detections = []
         
@@ -120,22 +121,18 @@ def process_frame(frame, roi_info=None):
                 conf = box.conf[0].item()
                 class_id = int(box.cls[0])
                 class_name = model.names[class_id]
-                
-                # Higher confidence threshold for Person detection
                 min_conf = SAFETY_THRESHOLD if class_name == 'Person' else 0.5
-                
                 if conf > min_conf:
                     detections.append({
                         'class': class_name,
                         'confidence': round(conf, 2),
                         'bbox': [x1, y1, x2, y2]
                     })
-        
         return detections
         
     except Exception as e:
         logging.error(f"Cropping or detection error: {str(e)}")
         return []
-      
+
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000)
+    socketio.run(app, host='0.0.0.0', port=5000)
