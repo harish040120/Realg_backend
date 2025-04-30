@@ -1,1 +1,1 @@
-web: gunicorn -w 1 -k threading app:app
+web: python app.py
