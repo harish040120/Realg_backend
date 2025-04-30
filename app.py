@@ -11,7 +11,7 @@ CORS(app)
 
 # Google Drive model download
 model_path = "best.onnx"
-model_url = "https://drive.google.com/uc?id=1mYZvpVaJWQl2PFCrjRWTPm3zRikmXgZiu"  # Replace with your actual model ID if different
+model_url = "https://drive.google.com/file/d/1JWVH0gQ4e6KVJERCNyQRgnD8FNP3pOZc/view?usp=drive_link"  # Replace with your actual model ID if different
 
 if not os.path.exists(model_path):
     print("🔄 Downloading model from Google Drive...")
