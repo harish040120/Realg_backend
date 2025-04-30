@@ -4,5 +4,7 @@ flask-socketio
 eventlet
 gunicorn
 ultralytics
-opencv-python-headless
+opencv-python
 numpy
+onnxruntime
+onnx
