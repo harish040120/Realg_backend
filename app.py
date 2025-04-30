@@ -17,7 +17,8 @@ logging.basicConfig(filename='web.log', level=logging.INFO,
 
 app = Flask(__name__)
 CORS(app)
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet')
+
 
 frame_queue = queue.Queue(maxsize=10)
 latest_detections = []
@@ -136,3 +137,4 @@ def process_frame(frame, roi_info=None):
 
 if __name__ == '__main__':
     socketio.run(app, host='0.0.0.0', port=5000)
+
