@@ -26,7 +26,7 @@ violation_history = []
 SAFETY_THRESHOLD = 0.65  # Higher confidence threshold for safety equipment
 
 # ✅ Replace this with your direct model download link (GitHub Release / HuggingFace)
-MODEL_URL = "https://huggingface.co/keremberke/yolov8n-onnx/resolve/main/yolov8n.onnx"
+MODEL_URL = "https://github.com/Deepakchandrasekar05/cctv_realg_backend/releases/download/Model/best.onnx"
 MODEL_PATH = "/tmp/model.onnx"
 
 def download_model():
