@@ -4,25 +4,27 @@ from ultralytics import YOLO
 import cv2
 import numpy as np
 import os
-import requests
+import gdown
 
 app = Flask(__name__)
 CORS(app)
 
-# Load YOLO model from Google Drive (if not already present)
+# Google Drive model download
 model_path = "best.onnx"
-model_url = "https://drive.google.com/uc?id=1mYZvpVaJWQl2PFCrjRWTPm3zRikmXgZiu&export=download"
+model_url = "https://drive.google.com/uc?id=1mYZvpVaJWQl2PFCrjRWTPm3zRikmXgZiu"  # Replace with your actual model ID if different
 
 if not os.path.exists(model_path):
-    print("Downloading model...")
-    response = requests.get(model_url)
-    with open(model_path, "wb") as f:
-        f.write(response.content)
-    print("Model downloaded.")
+    print("🔄 Downloading model from Google Drive...")
+    gdown.download(model_url, model_path, quiet=False)
+    print("✅ Model downloaded.")
 
 # Load YOLO model
-model = YOLO(model_path)
-model_loaded = True  # Signal that the model is ready
+try:
+    model = YOLO(model_path)
+    model_loaded = True
+except Exception as e:
+    print(f"❌ Failed to load model: {e}")
+    model_loaded = False
 
 @app.route('/')
 def home():
@@ -44,7 +46,10 @@ def detect():
     img_np = np.frombuffer(image_file.read(), np.uint8)
     img = cv2.imdecode(img_np, cv2.IMREAD_COLOR)
 
-    results = model(img)[0]
+    try:
+        results = model(img)[0]
+    except Exception as e:
+        return jsonify({'error': f'Model prediction failed: {str(e)}'}), 500
 
     detections = []
     for box in results.boxes:
