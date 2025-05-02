@@ -12,21 +12,20 @@ from flask_socketio import SocketIO, emit
 import os
 import gdown
 
-# ---------------- Flask + CORS Setup -------------------
+# 🔧 Flask setup
 app = Flask(__name__)
-CORS(app, origins=["http://localhost:5173"], supports_credentials=True)
+CORS(app, resources={r"/*": {"origins": "*"}})  # ✅ Allow all origins (for testing)
 
-# ---------------- SocketIO Setup -----------------------
+# Optional: Initialize SocketIO (not required if not using WebSockets in frontend)
 socketio = SocketIO(app, cors_allowed_origins="*")
 
-# ---------------- Globals ------------------------------
 frame_queue = queue.Queue(maxsize=10)
 latest_detections = []
 detection_event = threading.Event()
 violation_history = []
 SAFETY_THRESHOLD = 0.65
 
-# ---------------- Download YOLO Model ------------------
+# 📦 ONNX model download and load
 model_path = "best.onnx"
 drive_file_id = "1JWVH0gQ4e6KVJERCNyQRgnD8FNP3pOZc"
 gdown_url = f"https://drive.google.com/uc?id={drive_file_id}"
@@ -36,7 +35,7 @@ if not os.path.exists(model_path):
     gdown.download(gdown_url, model_path, quiet=False)
     print("✅ Model downloaded successfully.")
 
-# ---------------- Load Model ---------------------------
+# ✅ Load YOLO ONNX model
 try:
     model = YOLO(model_path)
     model_loaded = True
@@ -44,8 +43,6 @@ try:
 except Exception as e:
     print(f"❌ Model loading failed: {e}")
     model_loaded = False
-
-# ---------------- API Routes ---------------------------
 
 @app.route('/')
 def home():
@@ -59,7 +56,7 @@ def status():
 def get_violations():
     return jsonify({
         "total_violations": len(violation_history),
-        "violations": violation_history[-50:]
+        "violations": violation_history[-50:]  # Return last 50
     })
 
 @app.route('/detect', methods=['POST'])
@@ -103,8 +100,6 @@ def detect():
         logging.error(f"Error during object detection: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
-# ---------------- Frame Processing ---------------------
-
 def process_frame(frame, roi_info=None):
     if not model_loaded:
         return []
@@ -117,11 +112,11 @@ def process_frame(frame, roi_info=None):
             height = int(roi_info['height'])
             h, w = frame.shape[:2]
 
-            x = max(0, min(x, w-1))
-            y = max(0, min(y, h-1))
-            width = max(1, min(width, w-x))
-            height = max(1, min(height, h-y))
-            frame = frame[y:y+height, x:x+width]
+            x = max(0, min(x, w - 1))
+            y = max(0, min(y, h - 1))
+            width = max(1, min(width, w - x))
+            height = max(1, min(height, h - y))
+            frame = frame[y:y + height, x:x + width]
 
         results = model(frame)
         detections = []
@@ -148,7 +143,10 @@ def process_frame(frame, roi_info=None):
         logging.error(f"Cropping or detection error: {str(e)}")
         return []
 
-# ---------------- Run App ------------------------------
+# Optional: For testing CORS with curl/postman
+@app.route('/test-cors')
+def test_cors():
+    return jsonify({"message": "CORS is working!"})
 
 if __name__ == '__main__':
     socketio.run(app, host='0.0.0.0', port=5000)
