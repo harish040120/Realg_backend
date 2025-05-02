@@ -13,7 +13,7 @@ import os
 import gdown
 
 app = Flask(__name__)
-CORS(app)
+CORS(app, supports_credentials=True)
 socketio = SocketIO(app, cors_allowed_origins="*")
 
 frame_queue = queue.Queue(maxsize=10)
