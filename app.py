@@ -26,8 +26,8 @@ violation_history = []
 SAFETY_THRESHOLD = 0.65
 
 # 📦 ONNX model download and load
-model_path = "best.onnx"
-drive_file_id = "1JWVH0gQ4e6KVJERCNyQRgnD8FNP3pOZc"
+model_path = "best.pt"
+drive_file_id = "1Pai91-TwbtBJ_U8DsAAbiapB-nWozVOb"
 gdown_url = f"https://drive.google.com/uc?id={drive_file_id}"
 
 if not os.path.exists(model_path):
