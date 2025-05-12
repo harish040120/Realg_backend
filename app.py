@@ -6,17 +6,14 @@ import cv2
 import numpy as np
 from datetime import datetime
 from flask import Flask, request, jsonify
-from ultralytics import YOLO
 from flask_cors import CORS
 from flask_socketio import SocketIO, emit
 import os
 import gdown
+import onnxruntime as ort
 
-# 🔧 Flask setup
 app = Flask(__name__)
-CORS(app, resources={r"/*": {"origins": "*"}})  # ✅ Allow all origins (for testing)
-
-# Optional: Initialize SocketIO (not required if not using WebSockets in frontend)
+CORS(app, resources={r"/*": {"origins": "*"}})
 socketio = SocketIO(app, cors_allowed_origins="*")
 
 frame_queue = queue.Queue(maxsize=10)
@@ -25,28 +22,31 @@ detection_event = threading.Event()
 violation_history = []
 SAFETY_THRESHOLD = 0.65
 
-# 📦 ONNX model download and load
-model_path = "best.pt"
-drive_file_id = "1Pai91-TwbtBJ_U8DsAAbiapB-nWozVOb"
+model_path = "best.onnx"
+drive_file_id = "1JWVH0gQ4e6KVJERCNyQRgnD8FNP3pOZc"
 gdown_url = f"https://drive.google.com/uc?id={drive_file_id}"
 
+# 🔽 Download model if not exists
 if not os.path.exists(model_path):
     print("🔄 Downloading ONNX model from Google Drive...")
-    gdown.download(gdown_url, model_path, quiet=False)
+    downloaded = gdown.download(gdown_url, model_path, quiet=False)
+    if downloaded is None or not os.path.exists(model_path):
+        raise FileNotFoundError("❌ Failed to download the ONNX model.")
     print("✅ Model downloaded successfully.")
 
-# ✅ Load YOLO ONNX model
+# 🔁 Load ONNX model using ONNX Runtime
 try:
-    model = YOLO(model_path)
+    session = ort.InferenceSession(model_path)
+    input_name = session.get_inputs()[0].name
     model_loaded = True
-    print("✅ Model loaded and ready.")
+    print("✅ ONNX model loaded successfully.")
 except Exception as e:
-    print(f"❌ Model loading failed: {e}")
+    print(f"❌ Failed to load ONNX model: {e}")
     model_loaded = False
 
 @app.route('/')
 def home():
-    return "🚀 YOLO ONNX Flask App is running!"
+    return "🚀 CCTV ONNX Flask App is running!"
 
 @app.route('/status')
 def status():
@@ -56,11 +56,14 @@ def status():
 def get_violations():
     return jsonify({
         "total_violations": len(violation_history),
-        "violations": violation_history[-50:]  # Return last 50
+        "violations": violation_history[-50:]
     })
 
 @app.route('/detect', methods=['POST'])
 def detect():
+    if not model_loaded:
+        return jsonify({'error': 'Model not loaded'}), 500
+
     try:
         if 'image' not in request.files:
             return jsonify({'error': 'No image provided'}), 400
@@ -70,16 +73,13 @@ def detect():
         nparr = np.frombuffer(img_bytes, np.uint8)
         frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
 
-        roi_info = None
-        if 'roi' in request.form:
-            roi_info = json.loads(request.form['roi'])
-
+        roi_info = json.loads(request.form['roi']) if 'roi' in request.form else None
         detections = process_frame(frame, roi_info)
 
-        current_violations = []
-        for d in detections:
-            if d['class'] in ['NO-Hardhat', 'NO-Mask', 'NO-Safety Vest'] and d['confidence'] > SAFETY_THRESHOLD:
-                current_violations.append(d)
+        current_violations = [
+            d for d in detections
+            if d['class'] in ['NO-Hardhat', 'NO-Mask', 'NO-Safety Vest'] and d['confidence'] > SAFETY_THRESHOLD
+        ]
 
         if current_violations:
             timestamp = datetime.now().isoformat()
@@ -97,13 +97,10 @@ def detect():
         })
 
     except Exception as e:
-        logging.error(f"Error during object detection: {str(e)}")
+        logging.error(f"Error during detection: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
 def process_frame(frame, roi_info=None):
-    if not model_loaded:
-        return []
-
     try:
         if roi_info and 'offset' in roi_info:
             x = int(roi_info['offset']['x'])
@@ -118,32 +115,33 @@ def process_frame(frame, roi_info=None):
             height = max(1, min(height, h - y))
             frame = frame[y:y + height, x:x + width]
 
-        results = model(frame)
+        # Preprocess
+        resized = cv2.resize(frame, (640, 640))
+        blob = cv2.dnn.blobFromImage(resized, 1/255.0, (640, 640), swapRB=True, crop=False)
+        blob = blob.astype(np.float32)
+
+        # Inference
+        outputs = session.run(None, {input_name: blob})[0]
+
+        # Postprocess (⚠️ requires adapting to your model's output format)
         detections = []
-
-        for r in results:
-            for box in r.boxes:
-                x1, y1, x2, y2 = map(int, box.xyxy[0])
-                conf = box.conf[0].item()
-                class_id = int(box.cls[0])
-                class_name = model.names[class_id]
-
-                min_conf = SAFETY_THRESHOLD if class_name == 'Person' else 0.5
-
-                if conf > min_conf:
-                    detections.append({
-                        'class': class_name,
-                        'confidence': round(conf, 2),
-                        'bbox': [x1, y1, x2, y2]
-                    })
+        for det in outputs:
+            conf = float(det[4])
+            class_id = int(det[5])
+            if conf > SAFETY_THRESHOLD:
+                x1, y1, x2, y2 = map(int, det[:4])
+                detections.append({
+                    'class': f'class_{class_id}',
+                    'confidence': round(conf, 2),
+                    'bbox': [x1, y1, x2, y2]
+                })
 
         return detections
 
     except Exception as e:
-        logging.error(f"Cropping or detection error: {str(e)}")
+        logging.error(f"Detection error: {str(e)}")
         return []
 
-# Optional: For testing CORS with curl/postman
 @app.route('/test-cors')
 def test_cors():
     return jsonify({"message": "CORS is working!"})
