@@ -13,7 +13,7 @@ import gdown
 import onnxruntime as ort
 
 app = Flask(__name__)
-CORS(app, resources={r"/*": {"origins": "*"}})
+CORS(app, resources={r"/*": {"origins": "http://localhost:5173"}})
 socketio = SocketIO(app, cors_allowed_origins="*")
 
 frame_queue = queue.Queue(maxsize=10)
