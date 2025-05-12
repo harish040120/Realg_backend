@@ -12,9 +12,12 @@ import os
 import gdown
 import onnxruntime as ort
 
+logging.basicConfig(filename='web.log', level=logging.INFO, 
+                    format='%(asctime)s - %(levelname)s - %(message)s')
+
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "http://localhost:5173"}})
-socketio = SocketIO(app, cors_allowed_origins="*")
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
 
 frame_queue = queue.Queue(maxsize=10)
 latest_detections = []
@@ -22,11 +25,11 @@ detection_event = threading.Event()
 violation_history = []
 SAFETY_THRESHOLD = 0.65
 
+# Model Download + Load
 model_path = "best.onnx"
 drive_file_id = "1JWVH0gQ4e6KVJERCNyQRgnD8FNP3pOZc"
 gdown_url = f"https://drive.google.com/uc?id={drive_file_id}"
 
-# 🔽 Download model if not exists
 if not os.path.exists(model_path):
     print("🔄 Downloading ONNX model from Google Drive...")
     downloaded = gdown.download(gdown_url, model_path, quiet=False)
@@ -34,7 +37,6 @@ if not os.path.exists(model_path):
         raise FileNotFoundError("❌ Failed to download the ONNX model.")
     print("✅ Model downloaded successfully.")
 
-# 🔁 Load ONNX model using ONNX Runtime
 try:
     session = ort.InferenceSession(model_path)
     input_name = session.get_inputs()[0].name
@@ -44,13 +46,16 @@ except Exception as e:
     print(f"❌ Failed to load ONNX model: {e}")
     model_loaded = False
 
+
 @app.route('/')
 def home():
-    return "🚀 CCTV ONNX Flask App is running!"
+    return "🚀 CCTV Safety Detection API is running!"
+
 
 @app.route('/status')
 def status():
     return jsonify({"ready": model_loaded})
+
 
 @app.route('/violations')
 def get_violations():
@@ -58,6 +63,7 @@ def get_violations():
         "total_violations": len(violation_history),
         "violations": violation_history[-50:]
     })
+
 
 @app.route('/detect', methods=['POST'])
 def detect():
@@ -100,6 +106,7 @@ def detect():
         logging.error(f"Error during detection: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
+
 def process_frame(frame, roi_info=None):
     try:
         if roi_info and 'offset' in roi_info:
@@ -118,22 +125,27 @@ def process_frame(frame, roi_info=None):
         # Preprocess
         resized = cv2.resize(frame, (640, 640))
         blob = cv2.dnn.blobFromImage(resized, 1/255.0, (640, 640), swapRB=True, crop=False)
-        blob = blob.astype(np.float32)
 
         # Inference
         outputs = session.run(None, {input_name: blob})[0]
 
-        # Postprocess (⚠️ requires adapting to your model's output format)
+        # Postprocess
         detections = []
         for det in outputs:
-            conf = float(det[4].item()) if isinstance(det[4], np.ndarray) else float(det[4])
-            class_id = int(det[5].item()) if isinstance(det[5], np.ndarray) else int(det[5])
-            if conf > SAFETY_THRESHOLD:
-                x1, y1, x2, y2 = [int(x.item()) if isinstance(x, np.ndarray) else int(x) for x in det[:4]]
+            # Safely extract values (fixes the scalar conversion error)
+            try:
+                conf = float(det[4].item()) if isinstance(det[4], np.ndarray) else float(det[4])
+                class_id = int(det[5].item()) if isinstance(det[5], np.ndarray) else int(det[5])
+                bbox = [int(x.item()) if isinstance(x, np.ndarray) else int(x) for x in det[:4]]
+            except Exception as e:
+                logging.warning(f"Skipping invalid detection: {str(e)}")
+                continue
+
+            if conf > 0.3:
                 detections.append({
                     'class': f'class_{class_id}',
                     'confidence': round(conf, 2),
-                    'bbox': [x1, y1, x2, y2]
+                    'bbox': bbox
                 })
 
         return detections
@@ -142,9 +154,11 @@ def process_frame(frame, roi_info=None):
         logging.error(f"Detection error: {str(e)}")
         return []
 
+
 @app.route('/test-cors')
 def test_cors():
     return jsonify({"message": "CORS is working!"})
+
 
 if __name__ == '__main__':
     socketio.run(app, host='0.0.0.0', port=5000)
