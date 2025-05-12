@@ -16,7 +16,9 @@ logging.basicConfig(filename='web.log', level=logging.INFO,
                     format='%(asctime)s - %(levelname)s - %(message)s')
 
 app = Flask(__name__)
-CORS(app, resources={r"/*": {"origins": "http://localhost:5173"}})
+from flask_cors import CORS
+app = Flask(__name__)
+CORS(app, resources={r"/*": {"origins": "*"}})  # Allow all origins 
 socketio = SocketIO(app, cors_allowed_origins="*")
 
 frame_queue = queue.Queue(maxsize=10)
@@ -132,14 +134,14 @@ def process_frame(frame, roi_info=None):
         # Postprocess
         detections = []
         for det in outputs:
-            # Safely extract values (fixes the scalar conversion error)
-            try:
-                conf = float(det[4].item()) if isinstance(det[4], np.ndarray) else float(det[4])
-                class_id = int(det[5].item()) if isinstance(det[5], np.ndarray) else int(det[5])
-                bbox = [int(x.item()) if isinstance(x, np.ndarray) else int(x) for x in det[:4]]
-            except Exception as e:
-                logging.warning(f"Skipping invalid detection: {str(e)}")
-                continue
+        try:
+            conf = float(det[4].item()) if isinstance(det[4], np.ndarray) else float(det[4])
+            class_id = int(det[5].item()) if isinstance(det[5], np.ndarray) else int(det[5])
+            x1, y1, x2, y2 = [int(x.item()) if isinstance(x, np.ndarray) else int(x) for x in det[:4]]
+        except Exception as e:
+            logging.warning(f"Skipping bad detection: {e}")
+            continue
+
 
             if conf > 0.3:
                 detections.append({
