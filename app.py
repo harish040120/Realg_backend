@@ -16,10 +16,8 @@ logging.basicConfig(filename='web.log', level=logging.INFO,
                     format='%(asctime)s - %(levelname)s - %(message)s')
 
 app = Flask(__name__)
-from flask_cors import CORS
-app = Flask(__name__)
-CORS(app, resources={r"/*": {"origins": "*"}})  # Allow all origins 
-socketio = SocketIO(app, cors_allowed_origins="*")
+CORS(app, resources={r"/*": {"origins": "*"}})
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading")
 
 frame_queue = queue.Queue(maxsize=10)
 latest_detections = []
@@ -126,7 +124,7 @@ def process_frame(frame, roi_info=None):
 
         # Preprocess
         resized = cv2.resize(frame, (640, 640))
-        blob = cv2.dnn.blobFromImage(resized, 1/255.0, (640, 640), swapRB=True, crop=False)
+        blob = cv2.dnn.blobFromImage(resized, 1 / 255.0, (640, 640), swapRB=True, crop=False)
 
         # Inference
         outputs = session.run(None, {input_name: blob})[0]
@@ -134,14 +132,13 @@ def process_frame(frame, roi_info=None):
         # Postprocess
         detections = []
         for det in outputs:
-        try:
-            conf = float(det[4].item()) if isinstance(det[4], np.ndarray) else float(det[4])
-            class_id = int(det[5].item()) if isinstance(det[5], np.ndarray) else int(det[5])
-            x1, y1, x2, y2 = [int(x.item()) if isinstance(x, np.ndarray) else int(x) for x in det[:4]]
-        except Exception as e:
-            logging.warning(f"Skipping bad detection: {e}")
-            continue
-
+            try:
+                conf = float(det[4].item()) if isinstance(det[4], np.ndarray) else float(det[4])
+                class_id = int(det[5].item()) if isinstance(det[5], np.ndarray) else int(det[5])
+                bbox = [int(x.item()) if isinstance(x, np.ndarray) else int(x) for x in det[:4]]
+            except Exception as e:
+                logging.warning(f"Skipping bad detection: {e}")
+                continue
 
             if conf > 0.3:
                 detections.append({
@@ -163,4 +160,4 @@ def test_cors():
 
 
 if __name__ == '__main__':
-    socketio.run(app, host='0.0.0.0', port=5000, allow_unsafe_werkzeug=True)
+    socketio.run(app, host='0.0.0.0', p
