@@ -2,11 +2,7 @@ flask
 flask-cors
 flask-socketio
 eventlet
-gunicorn
-ultralytics
-opencv-python-headless
 numpy
+opencv-python-headless
 onnxruntime
-onnx
 gdown
-requests
