@@ -1,24 +1,26 @@
-# Use official Python base image
+# Use lightweight Python image
 FROM python:3.10-slim
 
-# Install required system packages
+# Install only required OS packages
 RUN apt-get update && apt-get install -y \
     libgl1-mesa-glx \
     libglib2.0-0 \
-    && rm -rf /var/lib/apt/lists/*
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Set work directory
+# Set working directory
 WORKDIR /app
 
-# Copy project files
-COPY . /app
+# Copy only what's needed
+COPY requirements.txt .
 
-# Install Python dependencies
-RUN pip install --upgrade pip
-RUN pip install -r requirements.txt
+# Install Python dependencies with no cache
+RUN pip install --no-cache-dir -r requirements.txt
 
-# Expose port
+# Copy app code last (prevents rebuilds on every change)
+COPY . .
+
+# Expose app port
 EXPOSE 5000
 
-# Run the app
+# Run your app
 CMD ["python", "app.py"]
