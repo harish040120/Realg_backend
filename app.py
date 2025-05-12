@@ -126,10 +126,10 @@ def process_frame(frame, roi_info=None):
         # Postprocess (⚠️ requires adapting to your model's output format)
         detections = []
         for det in outputs:
-            conf = float(det[4])
-            class_id = int(det[5])
+            conf = float(det[4].item()) if isinstance(det[4], np.ndarray) else float(det[4])
+            class_id = int(det[5].item()) if isinstance(det[5], np.ndarray) else int(det[5])
             if conf > SAFETY_THRESHOLD:
-                x1, y1, x2, y2 = map(int, det[:4])
+                x1, y1, x2, y2 = [int(x.item()) if isinstance(x, np.ndarray) else int(x) for x in det[:4]]
                 detections.append({
                     'class': f'class_{class_id}',
                     'confidence': round(conf, 2),
