@@ -17,7 +17,7 @@ logging.basicConfig(filename='web.log', level=logging.INFO,
 
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "http://localhost:5173"}})
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
+socketio = SocketIO(app, cors_allowed_origins="*")
 
 frame_queue = queue.Queue(maxsize=10)
 latest_detections = []
