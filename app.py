@@ -18,6 +18,8 @@ logging.basicConfig(filename='web.log', level=logging.INFO,
 
 # Flask + CORS + SocketIO
 app = Flask(__name__)
+app.config['MAX_CONTENT_LENGTH'] = 40 * 1024 * 1024  # 40 MB limit
+
 CORS(app, origins=["https://realg-c55af.web.app"], supports_credentials=True,
      allow_headers=["Content-Type", "Authorization"], methods=["GET", "POST", "OPTIONS"])
 socketio = SocketIO(app, cors_allowed_origins=["https://realg-c55af.web.app"], async_mode="threading")
@@ -140,6 +142,10 @@ def process_frame(frame, roi_info=None):
     except Exception as e:
         logging.error(f"Cropping or detection error: {str(e)}")
         return []
+
+@app.errorhandler(413)
+def file_too_large(e):
+    return jsonify({'error': 'File too large. Limit is 40MB.'}), 413
 
 if __name__ == '__main__':
     socketio.run(app, host='0.0.0.0', port=int(os.environ.get("PORT", 5000)),allow_unsafe_werkzeug=True)
