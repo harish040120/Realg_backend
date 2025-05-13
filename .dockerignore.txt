@@ -1,0 +1,12 @@
+__pycache__/
+*.log
+*.mp4
+*.jpg
+*.png
+.env
+env/
+.venv/
+*.zip
+*.tar
+node_modules/
+.vscode/
