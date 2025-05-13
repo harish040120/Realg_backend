@@ -2,60 +2,58 @@ import logging
 import threading
 import queue
 import json
+import os
 import cv2
 import numpy as np
+import gdown
 from datetime import datetime
 from flask import Flask, request, jsonify
+from ultralytics import YOLO
 from flask_cors import CORS
 from flask_socketio import SocketIO, emit
-import os
-import gdown
-import onnxruntime as ort
 
-logging.basicConfig(filename='web.log', level=logging.INFO, 
+# Logging Setup
+logging.basicConfig(filename='web.log', level=logging.INFO,
                     format='%(asctime)s - %(levelname)s - %(message)s')
 
+# Flask + CORS + SocketIO
 app = Flask(__name__)
-CORS(app, origins="http://localhost:5173", supports_credentials=True, allow_headers=["Content-Type", "Authorization"], methods=["GET", "POST", "OPTIONS"])
+CORS(app, origins="*", supports_credentials=True,
+     allow_headers=["Content-Type", "Authorization"],
+     methods=["GET", "POST", "OPTIONS"])
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading")
 
+# Globals
 frame_queue = queue.Queue(maxsize=10)
 latest_detections = []
 detection_event = threading.Event()
 violation_history = []
 SAFETY_THRESHOLD = 0.65
 
-# Model Download + Load
+# Model Info
 model_path = "best.onnx"
 drive_file_id = "1JWVH0gQ4e6KVJERCNyQRgnD8FNP3pOZc"
 gdown_url = f"https://drive.google.com/uc?id={drive_file_id}"
 
-if not os.path.exists(model_path):
-    print("🔄 Downloading ONNX model from Google Drive...")
-    downloaded = gdown.download(gdown_url, model_path, quiet=False)
-    if downloaded is None or not os.path.exists(model_path):
-        raise FileNotFoundError("❌ Failed to download the ONNX model.")
-    print("✅ Model downloaded successfully.")
+# Function: Download + Load model
+def download_and_load_model():
+    global model
+    if not os.path.exists(model_path):
+        logging.info("Downloading model...")
+        gdown.download(gdown_url, model_path, quiet=False)
+        logging.info("Model downloaded.")
 
-try:
-    session = ort.InferenceSession(model_path)
-    input_name = session.get_inputs()[0].name
-    model_loaded = True
-    print("✅ ONNX model loaded successfully.")
-except Exception as e:
-    print(f"❌ Failed to load ONNX model: {e}")
-    model_loaded = False
+    logging.info("Loading YOLO ONNX model...")
+    model = YOLO(model_path, task='detect')
+    _ = model(np.zeros((640, 480, 3), dtype=np.uint8))  # Warm-up
+    logging.info("Model loaded and warmed up.")
 
-
-@app.route('/')
-def home():
-    return "🚀 CCTV Safety Detection API is running!"
-
+# Async loading on server start
+threading.Thread(target=download_and_load_model, daemon=True).start()
 
 @app.route('/status')
 def status():
-    return jsonify({"ready": model_loaded})
-
+    return jsonify({"ready": "model" in globals()})
 
 @app.route('/violations')
 def get_violations():
@@ -64,12 +62,8 @@ def get_violations():
         "violations": violation_history[-50:]
     })
 
-
 @app.route('/detect', methods=['POST'])
 def detect():
-    if not model_loaded:
-        return jsonify({'error': 'Model not loaded'}), 500
-
     try:
         if 'image' not in request.files:
             return jsonify({'error': 'No image provided'}), 400
@@ -103,11 +97,13 @@ def detect():
         })
 
     except Exception as e:
-        logging.error(f"Error during detection: {str(e)}")
+        logging.error(f"Error during object detection: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
-
 def process_frame(frame, roi_info=None):
+    if 'model' not in globals():
+        return []
+
     try:
         if roi_info and 'offset' in roi_info:
             x = int(roi_info['offset']['x'])
@@ -115,50 +111,31 @@ def process_frame(frame, roi_info=None):
             width = int(roi_info['width'])
             height = int(roi_info['height'])
             h, w = frame.shape[:2]
-
-            x = max(0, min(x, w - 1))
-            y = max(0, min(y, h - 1))
-            width = max(1, min(width, w - x))
-            height = max(1, min(height, h - y))
+            x, y = max(0, min(x, w - 1)), max(0, min(y, h - 1))
+            width, height = max(1, min(width, w - x)), max(1, min(height, h - y))
             frame = frame[y:y + height, x:x + width]
 
-        # Preprocess
-        resized = cv2.resize(frame, (640, 640))
-        blob = cv2.dnn.blobFromImage(resized, 1 / 255.0, (640, 640), swapRB=True, crop=False)
-
-        # Inference
-        outputs = session.run(None, {input_name: blob})[0]
-
-        # Postprocess
+        results = model(frame)
         detections = []
-        for det in outputs:
-            try:
-                conf = float(det[4].item()) if isinstance(det[4], np.ndarray) else float(det[4])
-                class_id = int(det[5].item()) if isinstance(det[5], np.ndarray) else int(det[5])
-                bbox = [int(x.item()) if isinstance(x, np.ndarray) else int(x) for x in det[:4]]
-            except Exception as e:
-                logging.warning(f"Skipping bad detection: {e}")
-                continue
+        for r in results:
+            for box in r.boxes:
+                x1, y1, x2, y2 = map(int, box.xyxy[0])
+                conf = box.conf[0].item()
+                class_id = int(box.cls[0])
+                class_name = model.names[class_id]
+                min_conf = SAFETY_THRESHOLD if class_name == 'Person' else 0.5
 
-            if conf > 0.3:
-                detections.append({
-                    'class': f'class_{class_id}',
-                    'confidence': round(conf, 2),
-                    'bbox': bbox
-                })
-
+                if conf > min_conf:
+                    detections.append({
+                        'class': class_name,
+                        'confidence': round(conf, 2),
+                        'bbox': [x1, y1, x2, y2]
+                    })
         return detections
 
     except Exception as e:
-        logging.error(f"Detection error: {str(e)}")
+        logging.error(f"Cropping or detection error: {str(e)}")
         return []
 
-
-@app.route('/test-cors')
-def test_cors():
-    return jsonify({"message": "CORS is working!"})
-
-
 if __name__ == '__main__':
-    port = int(os.environ.get("PORT", 5000))
-    socketio.run(app, host='0.0.0.0', port=port, allow_unsafe_werkzeug=True)
+    socketio.run(app, host='0.0.0.0', port=int(os.environ.get("PORT", 5000)))
