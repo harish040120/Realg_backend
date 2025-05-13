@@ -51,6 +51,10 @@ def download_and_load_model():
 # Async loading on server start
 threading.Thread(target=download_and_load_model, daemon=True).start()
 
+@app.route('/')
+def home():
+    return "🚀 YOLO ONNX Flask App is running!"
+
 @app.route('/status')
 def status():
     return jsonify({"ready": "model" in globals()})
