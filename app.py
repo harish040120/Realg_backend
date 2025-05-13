@@ -18,9 +18,9 @@ logging.basicConfig(filename='web.log', level=logging.INFO,
 
 # Flask + CORS + SocketIO
 app = Flask(__name__)
-CORS(app, origins=["https://realg-website.web.app"], supports_credentials=True,
+CORS(app, origins=["https://realg-c55af.web.app"], supports_credentials=True,
      allow_headers=["Content-Type", "Authorization"], methods=["GET", "POST", "OPTIONS"])
-socketio = SocketIO(app, cors_allowed_origins=["https://realg-website.web.app"], async_mode="threading")
+socketio = SocketIO(app, cors_allowed_origins=["https://realg-c55af.web.app"], async_mode="threading")
 
 
 # Globals
