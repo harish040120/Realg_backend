@@ -18,10 +18,10 @@ logging.basicConfig(filename='web.log', level=logging.INFO,
 
 # Flask + CORS + SocketIO
 app = Flask(__name__)
-CORS(app, origins="*", supports_credentials=True,
-     allow_headers=["Content-Type", "Authorization"],
-     methods=["GET", "POST", "OPTIONS"])
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading")
+CORS(app, origins=["https://realg-website.web.app"], supports_credentials=True,
+     allow_headers=["Content-Type", "Authorization"], methods=["GET", "POST", "OPTIONS"])
+socketio = SocketIO(app, cors_allowed_origins=["https://realg-website.web.app"], async_mode="threading")
+
 
 # Globals
 frame_queue = queue.Queue(maxsize=10)
