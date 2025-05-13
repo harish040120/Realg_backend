@@ -1,10 +1,10 @@
-flask
-flask-cors
-flask-socketio
-eventlet
-opencv-python
-numpy
-ultralytics
-gdown
-onnx
-onnxruntime
+flask==2.3.3
+flask-cors==4.0.0
+flask-socketio==5.3.6
+python-socketio==5.10.0
+python-engineio==4.7.1
+ultralytics==8.1.22  # Compatible YOLOv8 version
+onnxruntime==1.16.3
+opencv-python-headless==4.9.0.80  # Use headless version to reduce image size
+gdown==5.1.0
+numpy==1.24.4
